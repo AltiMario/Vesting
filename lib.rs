@@ -187,7 +187,7 @@ mod vesting {
     mod tests {
         use super::*;
         use ink::env::{
-            test::{default_accounts, set_caller, set_value_transferred, set_block_timestamp},
+            test::{default_accounts, set_caller, set_value_transferred, set_block_timestamp, get_account_balance},
             DefaultEnvironment,
         };
 
@@ -217,20 +217,31 @@ mod vesting {
             assert_eq!(result, Err(Error::IdOverflow));
         }
 
-        /// Tests the successful withdrawal of funds after the unlock period has passed.
+        /// Tests the successful withdrawal of funds after the unlock period has passed with multiple vestings.
         ///
         /// This test verifies that:
-        /// 1. Funds can be deposited into a vesting schedule.
-        /// 2. Funds cannot be withdrawn before the unlock time.
-        /// 3. Funds can be successfully withdrawn after the unlock time.
+        /// 1. Multiple funds can be deposited into different vesting schedules for the same beneficiary.
+        /// 2. Each vesting can have different deposited amount and unlock time
+        /// 3. Funds cannot be withdrawn before the unlock time.
+        /// 4. All funds can be successfully withdrawn after the unlock time.
+        /// 5. The withdrawn amount is the sum of all deposited amounts.
         #[ink::test]
         fn successful_withdrawal_after_unlock() {
             // Arrange
             // Get test accounts
             let accounts = default_accounts::<DefaultEnvironment>();
-            // Define initial timestamp and unlock timestamp
+            // Define initial timestamp
             let initial_time: Timestamp = 242208000;
-            let unlock_time: Timestamp = 1820044800; //50 years later
+            // Define unlock timestamps for each vesting
+            let unlock_time_1: Timestamp = 1820044800; //50 years later
+            let unlock_time_2: Timestamp = 1851580800; //51 years later
+            let unlock_time_3: Timestamp = 1883116800; //52 years later
+            // Define the amount of tokens to transfer for each vesting
+            let amount_1: Balance = 100;
+            let amount_2: Balance = 200;
+            let amount_3: Balance = 300;
+            // Calculate the total amount
+            let total_amount: Balance = amount_1 + amount_2 + amount_3;
 
             // Set the initial caller to Alice (the owner)
             set_caller::<DefaultEnvironment>(accounts.alice);
@@ -240,19 +251,34 @@ mod vesting {
             let mut contract = Vesting::new();
 
             // Act
-            // Simulate a deposit of 100 tokens from Alice to Bob, with a future unlock time
-            ink::env::test::set_value_transferred::<ink::env::DefaultEnvironment>(100);
-            assert_eq!(contract.deposit_fund(accounts.bob, unlock_time), Ok(()));
+            // Simulate multiple deposits from Alice to Bob, with different unlock times
+            set_value_transferred::<ink::env::DefaultEnvironment>(amount_1);
+            assert_eq!(contract.deposit_fund(accounts.bob, unlock_time_1), Ok(()));
 
-            // Advance the block timestamp to the unlock time
-            set_block_timestamp::<ink::env::DefaultEnvironment>(unlock_time);
+            set_value_transferred::<ink::env::DefaultEnvironment>(amount_2);
+            assert_eq!(contract.deposit_fund(accounts.bob, unlock_time_2), Ok(()));
+
+            set_value_transferred::<ink::env::DefaultEnvironment>(amount_3);
+            assert_eq!(contract.deposit_fund(accounts.bob, unlock_time_3), Ok(()));
+
+            // Advance the block timestamp to a time after all unlocks
+            set_block_timestamp::<ink::env::DefaultEnvironment>(unlock_time_3 + 1);
 
             // Set the caller to Bob (the beneficiary)
             set_caller::<DefaultEnvironment>(accounts.bob);
 
-            // Assert
+            // Get Bob's initial balance
+            let initial_balance = get_account_balance::<DefaultEnvironment>(accounts.bob).expect("Failed to get initial balance");
+
             // Attempt to withdraw the funds, which should now be unlocked
             assert_eq!(contract.withdraw_fund(), Ok(()));
+
+            // Get Bob's final balance
+            let final_balance = get_account_balance::<DefaultEnvironment>(accounts.bob).expect("Failed to get final balance");
+
+            // Assert
+            // Check if the difference between the final and initial balance is equal to the total amount
+            assert_eq!(final_balance - initial_balance, total_amount);
         }
     }
 }
