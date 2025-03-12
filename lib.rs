@@ -5,7 +5,7 @@
 mod vesting {
     use ink::prelude::vec::Vec;
     use ink::storage::Mapping;
-    
+
     //----------------------------------
     // Error Handling
     //----------------------------------
@@ -13,9 +13,10 @@ mod vesting {
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub enum Error {
-        ZeroAmount = 0,       // When trying to deposit 0 value
+        ZeroAmount = 0, // When trying to deposit 0 value
         NoFundsAvailable = 1, // When no funds are available for withdrawal
-        TransferFailed = 2    // When token transfer fails
+        TransferFailed = 2, // When token transfer fails
+        IdOverflow = 3, // When schedule ID overflows
     }
 
     /// Type alias for Result that uses our custom Error
@@ -27,13 +28,13 @@ mod vesting {
     #[ink(storage)]
     pub struct Vesting {
         // Auto-incrementing ID for vesting schedules
-        next_id: u64,
+        id: u64,
         // Mapping from schedule ID to vesting details
         schedules: Mapping<u64, VestingSchedule>,
         // Mapping from beneficiary to their schedule IDs
         beneficiary_to_ids: Mapping<AccountId, Vec<u64>>,
     }
-    
+
     //----------------------------------
     // Default Implementation
     //----------------------------------
@@ -41,7 +42,7 @@ mod vesting {
     impl Default for Vesting {
         fn default() -> Self {
             Self {
-                next_id: 0,
+                id: 0,
                 schedules: Mapping::new(),
                 beneficiary_to_ids: Mapping::new(),
             }
@@ -56,14 +57,14 @@ mod vesting {
     #[cfg_attr(
         feature = "std",
         derive(
-            scale_info::TypeInfo,          // Required for metadata generation
+            scale_info::TypeInfo, // Required for metadata generation
             ink::storage::traits::StorageLayout // Required for storage mapping
         )
     )]
     struct VestingSchedule {
-        owner: AccountId,       // Who created the vesting schedule
+        owner: AccountId, // Who created the vesting schedule
         beneficiary: AccountId, // Who can claim the funds
-        amount: Balance,        // Amount to be vested
+        amount: Balance, // Amount to be vested
         unlock_time: Timestamp, // When funds become available
     }
 
@@ -82,20 +83,22 @@ mod vesting {
         pub fn deposit_fund(
             &mut self,
             beneficiary: AccountId,
-            unlock_time: Timestamp,
+            unlock_time: Timestamp
         ) -> Result<()> {
             // Get the caller and transferred amount
             let owner = self.env().caller();
             let amount = self.env().transferred_value();
-            
+
             // Prevent zero-value deposits
             if amount == 0 {
                 return Err(Error::ZeroAmount);
             }
 
             // Generate new schedule ID with overflow check
-            let id = self.next_id;
-            self.next_id = id.checked_add(1).ok_or(Error::TransferFailed)?;
+            // Without this check, if id reaches 18,446,744,073,709,551,615 (u64::MAX)
+            // Adding 1 would wrap to 0 (integer overflow)
+            let id = self.id;
+            self.id = id.checked_add(1).ok_or(Error::IdOverflow)?;
 
             // Create new vesting schedule
             let schedule = VestingSchedule {
@@ -133,7 +136,8 @@ mod vesting {
                 if let Some(schedule) = self.schedules.get(id) {
                     if schedule.unlock_time <= current_time {
                         // Add to total if unlocked, remove schedule
-                        total_amount = total_amount.checked_add(schedule.amount)
+                        total_amount = total_amount
+                            .checked_add(schedule.amount)
                             .ok_or(Error::TransferFailed)?;
                         self.schedules.remove(id);
                     } else {
@@ -152,7 +156,8 @@ mod vesting {
             self.beneficiary_to_ids.insert(beneficiary, &remaining_ids);
 
             // Transfer funds to beneficiary
-            self.env()
+            self
+                .env()
                 .transfer(beneficiary, total_amount)
                 .map_err(|_| Error::TransferFailed)?;
 
@@ -160,4 +165,36 @@ mod vesting {
         }
     }
 
+    //----------------------------------
+    // Testing Framework
+    //----------------------------------
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use ink::env::{
+            test::{default_accounts, set_caller, set_value_transferred},
+            DefaultEnvironment,
+        };
+
+        #[ink::test]
+        fn test_id_overflow() {
+            // Arrange
+            let accounts = default_accounts::<DefaultEnvironment>();
+            let unlocktime = 242208000;
+            let mut vesting = Vesting::new();
+            ink::env::debug_println!("---- initial id: {}", vesting.id);
+
+            vesting.id = u64::MAX; // Set id to the maximum value
+            ink::env::debug_println!("---- maximum id: {}", vesting.id);
+
+            set_caller::<DefaultEnvironment>(accounts.alice);
+            set_value_transferred::<DefaultEnvironment>(100);
+
+            // Act
+            let result = vesting.deposit_fund(accounts.bob, unlocktime);
+
+            // Assert
+            assert_eq!(result, Err(Error::IdOverflow));
+        }
+    }
 }
