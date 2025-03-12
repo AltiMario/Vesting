@@ -65,7 +65,7 @@ mod vesting {
         owner: AccountId, // Who created the vesting schedule
         beneficiary: AccountId, // Who can claim the funds
         amount: Balance, // Amount to be vested
-        unlock_time: Timestamp, // When funds become available
+        unlock_time: Timestamp, // When funds become available for withdrawal
     }
 
     //----------------------------------
@@ -78,7 +78,17 @@ mod vesting {
             Self::default()
         }
 
-        /// Deposit funds into a vesting schedule
+        /// Deposit funds into a vesting schedule.
+        ///
+        /// # Arguments
+        ///
+        /// * `beneficiary`: The account that will receive the vested funds.
+        /// * `unlock_time`: The timestamp when the funds will be unlocked.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Error::ZeroAmount` if the deposited amount is zero.
+        /// Returns `Error::IdOverflow` if the schedule ID counter overflows.
         #[ink(message, payable)]
         pub fn deposit_fund(
             &mut self,
@@ -119,7 +129,12 @@ mod vesting {
             Ok(())
         }
 
-        /// Withdraw all available vested funds for the caller
+        /// Withdraw all available vested funds for the caller.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Error::NoFundsAvailable` if no funds are available for withdrawal.
+        /// Returns `Error::TransferFailed` if the token transfer fails.
         #[ink(message)]
         pub fn withdraw_fund(&mut self) -> Result<()> {
             // Get caller and current block time
@@ -172,10 +187,15 @@ mod vesting {
     mod tests {
         use super::*;
         use ink::env::{
-            test::{default_accounts, set_caller, set_value_transferred},
+            test::{default_accounts, set_caller, set_value_transferred, set_block_timestamp},
             DefaultEnvironment,
         };
 
+        /// Tests the scenario where the schedule ID counter overflows.
+        ///
+        /// This test verifies that:
+        /// 1. When the `id` counter reaches its maximum value (u64::MAX).
+        /// 2. Attempting to create a new vesting schedule results in an `Error::IdOverflow`.
         #[ink::test]
         fn test_id_overflow() {
             // Arrange
@@ -195,6 +215,44 @@ mod vesting {
 
             // Assert
             assert_eq!(result, Err(Error::IdOverflow));
+        }
+
+        /// Tests the successful withdrawal of funds after the unlock period has passed.
+        ///
+        /// This test verifies that:
+        /// 1. Funds can be deposited into a vesting schedule.
+        /// 2. Funds cannot be withdrawn before the unlock time.
+        /// 3. Funds can be successfully withdrawn after the unlock time.
+        #[ink::test]
+        fn successful_withdrawal_after_unlock() {
+            // Arrange
+            // Get test accounts
+            let accounts = default_accounts::<DefaultEnvironment>();
+            // Define initial timestamp and unlock timestamp
+            let initial_time: Timestamp = 242208000;
+            let unlock_time: Timestamp = 1820044800; //50 years later
+
+            // Set the initial caller to Alice (the owner)
+            set_caller::<DefaultEnvironment>(accounts.alice);
+            // Set the initial block timestamp
+            set_block_timestamp::<ink::env::DefaultEnvironment>(initial_time);
+            // Instantiate the vesting contract
+            let mut contract = Vesting::new();
+
+            // Act
+            // Simulate a deposit of 100 tokens from Alice to Bob, with a future unlock time
+            ink::env::test::set_value_transferred::<ink::env::DefaultEnvironment>(100);
+            assert_eq!(contract.deposit_fund(accounts.bob, unlock_time), Ok(()));
+
+            // Advance the block timestamp to the unlock time
+            set_block_timestamp::<ink::env::DefaultEnvironment>(unlock_time);
+
+            // Set the caller to Bob (the beneficiary)
+            set_caller::<DefaultEnvironment>(accounts.bob);
+
+            // Assert
+            // Attempt to withdraw the funds, which should now be unlocked
+            assert_eq!(contract.withdraw_fund(), Ok(()));
         }
     }
 }
