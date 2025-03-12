@@ -187,7 +187,13 @@ mod vesting {
     mod tests {
         use super::*;
         use ink::env::{
-            test::{default_accounts, set_caller, set_value_transferred, set_block_timestamp, get_account_balance},
+            test::{
+                default_accounts,
+                set_caller,
+                set_value_transferred,
+                set_block_timestamp,
+                get_account_balance,
+            },
             DefaultEnvironment,
         };
 
@@ -217,6 +223,40 @@ mod vesting {
             assert_eq!(result, Err(Error::IdOverflow));
         }
 
+        /// Tests the scenario where a beneficiary attempts to withdraw funds before the unlock time.
+        ///
+        /// This test verifies that:
+        /// 1. Funds are deposited into a vesting schedule with a future unlock time.
+        /// 2. When the beneficiary attempts to withdraw funds before the unlock time.
+        /// 3. The `withdraw_fund` function returns `Err(Error::NoFundsAvailable)`.
+        #[ink::test]
+        fn test_withdraw_before_unlock() {
+            // Arrange
+            let accounts = default_accounts::<DefaultEnvironment>();
+            let initial_time: Timestamp = 242208000;
+            let unlock_time_attempt: Timestamp = initial_time + 1000; // Unlock in the future
+            let amount: Balance = 100;
+
+            // Set the initial caller to Alice (the owner)
+            set_caller::<DefaultEnvironment>(accounts.alice);
+            set_block_timestamp::<ink::env::DefaultEnvironment>(initial_time);
+            let mut contract = Vesting::new();
+
+            // Act
+            // Simulate a deposit of `amount` tokens from Alice to Bob, with a future unlock time
+            set_value_transferred::<ink::env::DefaultEnvironment>(amount);
+            assert_eq!(contract.deposit_fund(accounts.bob, unlock_time_attempt), Ok(()));
+            
+            // Set Bob as the caller (the beneficiary)
+            set_caller::<DefaultEnvironment>(accounts.bob);
+            // Attempt to withdraw before unlock
+            let result = contract.withdraw_fund();
+
+            // Assert
+            // Verify that the withdrawal fails with the expected error
+            assert_eq!(result, Err(Error::NoFundsAvailable));
+        }
+
         /// Tests the successful withdrawal of funds after the unlock period has passed with multiple vestings.
         ///
         /// This test verifies that:
@@ -226,7 +266,7 @@ mod vesting {
         /// 4. All funds can be successfully withdrawn after the unlock time.
         /// 5. The withdrawn amount is the sum of all deposited amounts.
         #[ink::test]
-        fn successful_withdrawal_after_unlock() {
+        fn tesst_successful_withdrawal_after_unlock() {
             // Arrange
             // Get test accounts
             let accounts = default_accounts::<DefaultEnvironment>();
@@ -268,13 +308,17 @@ mod vesting {
             set_caller::<DefaultEnvironment>(accounts.bob);
 
             // Get Bob's initial balance
-            let initial_balance = get_account_balance::<DefaultEnvironment>(accounts.bob).expect("Failed to get initial balance");
+            let initial_balance = get_account_balance::<DefaultEnvironment>(accounts.bob).expect(
+                "Failed to get initial balance"
+            );
 
             // Attempt to withdraw the funds, which should now be unlocked
             assert_eq!(contract.withdraw_fund(), Ok(()));
 
             // Get Bob's final balance
-            let final_balance = get_account_balance::<DefaultEnvironment>(accounts.bob).expect("Failed to get final balance");
+            let final_balance = get_account_balance::<DefaultEnvironment>(accounts.bob).expect(
+                "Failed to get final balance"
+            );
 
             // Assert
             // Check if the difference between the final and initial balance is equal to the total amount
